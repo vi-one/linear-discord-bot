@@ -1,0 +1,24 @@
+{
+  "name": "linear-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord bot that creates Linear issues when a trigger tag is added to a forum thread",
+  "type": "module",
+  "private": true,
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@linear/sdk": "^38.0.0",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "js-yaml": "^4.1.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^13.0.0"
+  }
+}

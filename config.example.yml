@@ -1,0 +1,61 @@
+# ============================================================================
+# linear-discord-bot configuration
+#
+# Copy this file to config.yml and adjust it. Values in ${...} are replaced
+# with environment variables at startup (put secrets in a .env file or the
+# process environment — never commit them here).
+# ============================================================================
+
+linear:
+  # Linear personal API key (https://linear.app/settings/api).
+  apiKey: ${LINEAR_API_KEY}
+
+discord:
+  # Discord bot token from the Developer Portal (Bot -> Token).
+  token: ${DISCORD_TOKEN}
+
+store:
+  # Where the bot remembers which threads already produced a Linear issue.
+  # Must be a writable path; the directory is created automatically.
+  # When running in Docker, keep this on a mounted volume so it survives
+  # container restarts. Default: ./data/processed.json
+  path: ./data/processed.json
+
+defaults:
+  # Forum tag name that triggers issue creation. Matched case-insensitively
+  # against the forum's tags. Can be overridden per forum below.
+  triggerTag: TODO
+
+# One entry per Discord server the bot should operate in. The bot must be
+# invited to each server. IDs are strings — keep them quoted so YAML does
+# not mangle them as numbers.
+guilds:
+  - id: "111111111111111111"        # Guild (server) ID — right-click server -> Copy Server ID
+    name: Example Server            # Optional, used only in logs
+    forums:
+      # Any number of forum channels per guild. Only forum-type channels
+      # (Discord "Forum" channels) work; anything else is ignored with a
+      # warning in the logs.
+      - channelId: "222222222222222222"   # Forum channel ID — right-click channel -> Copy Channel ID
+        team: ENG                          # Linear team key (e.g. ENG) or team UUID
+        triggerTag: TODO                   # Optional override of defaults.triggerTag
+        labelMap:                          # Discord forum tag name -> Linear label name
+          Bug: Bug
+          Feature: Feature Request
+          Question: Support
+        defaultLabels:                     # Linear labels applied to every issue from this forum
+          - discord
+
+      - channelId: "333333333333333333"
+        team: 01234567-89ab-cdef-0123-456789abcdef   # UUIDs work too
+        # No triggerTag -> uses defaults.triggerTag (TODO)
+        # labelMap / defaultLabels are optional
+        defaultLabels:
+          - community
+
+  - id: "444444444444444444"
+    name: Second Server
+    forums:
+      - channelId: "555555555555555555"
+        team: OPS
+        triggerTag: Escalate

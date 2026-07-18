@@ -1,6 +1,6 @@
 {
   "name": "linear-discord-bot",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Discord bot that creates Linear issues when a trigger tag is added to a forum thread",
   "type": "module",
   "private": true,

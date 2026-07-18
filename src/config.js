@@ -6,7 +6,7 @@
  * environment variables with `${VAR_NAME}` so secrets never have to live
  * in the file itself.
  *
- * Validation is strict and errors are collected so the user sees *all*
+ * Validation is strict and errors are collected so the user sees all
  * problems at once instead of fixing them one restart at a time.
  */
 import fs from 'node:fs';
@@ -60,6 +60,30 @@ function isNonEmptyString(value) {
 }
 
 /**
+ * The Discord permission that marks a member as a "moderator" of a forum. When
+ * an issue is created the bot DMs exactly the members who hold this permission
+ * on the forum channel, so the announcement is visible only to that forum's
+ * moderators. Overridable per forum.
+ */
+export const DEFAULT_MODERATOR_PERMISSION = 'ManageThreads';
+const MODERATOR_PERMISSIONS = new Set([
+  'ManageThreads',
+  'ManageChannels',
+  'ManageMessages',
+  'ManageGuild',
+  'Administrator',
+]);
+
+function normalizeModeratorPermission(raw, where, problems, fallback) {
+  if (raw === undefined) return fallback;
+  if (typeof raw !== 'string' || !MODERATOR_PERMISSIONS.has(raw)) {
+    problems.push(`${where} must be one of: ${[...MODERATOR_PERMISSIONS].join(', ')}`);
+    return fallback;
+  }
+  return raw;
+}
+
+/**
  * Validate the raw parsed config and normalize it into the shape the rest of
  * the app consumes. Returns the normalized config or throws ConfigError.
  */
@@ -85,6 +109,15 @@ function validateAndNormalize(raw, configPath) {
   // invalid (the problem above still makes us throw before returning).
   const safeDefaultTag = isNonEmptyString(defaultTriggerTag) ? defaultTriggerTag.trim() : DEFAULT_TRIGGER_TAG;
 
+  // Which permission defines a "moderator" for notifications (global default,
+  // overridable per forum). The bot DMs exactly the forum's moderators.
+  const defaultModeratorPermission = normalizeModeratorPermission(
+    raw.defaults?.moderatorPermission,
+    'defaults.moderatorPermission',
+    problems,
+    DEFAULT_MODERATOR_PERMISSION,
+  );
+
   const storePath = raw.store?.path ?? DEFAULT_STORE_PATH;
   if (!isNonEmptyString(storePath)) {
     problems.push('store.path must be a non-empty string when set');
@@ -92,14 +125,14 @@ function validateAndNormalize(raw, configPath) {
 
   const guilds = [];
   if (!Array.isArray(raw.guilds) || raw.guilds.length === 0) {
-    problems.push('guilds must be a non-empty list — the bot has nothing to do without at least one guild');
+    problems.push('guilds must be a non-empty list; the bot has nothing to do without at least one guild');
   } else {
     raw.guilds.forEach((guild, gi) => {
       const where = `guilds[${gi}]${guild?.name ? ` ("${guild.name}")` : ''}`;
 
       // IDs must be QUOTED strings in YAML. An unquoted 17-20 digit number is
       // silently corrupted by IEEE-754 precision, yet its String() form can
-      // still look like a valid snowflake — so require an actual string.
+      // still look like a valid snowflake, so require an actual string.
       const guildId = typeof guild?.id === 'string' ? guild.id : '';
       if (typeof guild?.id !== 'string' || !SNOWFLAKE_PATTERN.test(guildId)) {
         problems.push(`${where}.id must be a quoted Discord guild ID string (17-20 digits). Unquoted numbers are corrupted by YAML precision.`);
@@ -136,7 +169,7 @@ function validateAndNormalize(raw, configPath) {
                   continue;
                 }
                 // Tag matching is case-insensitive downstream, so two keys that
-                // differ only by case would silently collide — reject that.
+                // differ only by case would silently collide; reject that.
                 const lowerKey = tagName.toLowerCase();
                 if (seenTagKeys.has(lowerKey)) {
                   problems.push(`${fwhere}.labelMap has tag "${tagName}" more than once (matching is case-insensitive)`);
@@ -167,12 +200,21 @@ function validateAndNormalize(raw, configPath) {
             }
           }
 
+          // Per-forum moderator permission overrides the global default.
+          const moderatorPermission = normalizeModeratorPermission(
+            forum?.moderatorPermission,
+            `${fwhere}.moderatorPermission`,
+            problems,
+            defaultModeratorPermission,
+          );
+
           forums.push({
             channelId,
             team: typeof forum?.team === 'string' ? forum.team.trim() : forum?.team,
             triggerTag: isNonEmptyString(forum?.triggerTag) ? forum.triggerTag.trim() : safeDefaultTag,
             labelMap,
             defaultLabels,
+            moderatorPermission,
           });
         });
       }
@@ -212,7 +254,7 @@ function validateAndNormalize(raw, configPath) {
     linear: { apiKey: raw.linear.apiKey.trim() },
     discord: { token: raw.discord.token.trim() },
     store: { path: storePath },
-    defaults: { triggerTag: safeDefaultTag },
+    defaults: { triggerTag: safeDefaultTag, moderatorPermission: defaultModeratorPermission },
     guilds,
   };
 }

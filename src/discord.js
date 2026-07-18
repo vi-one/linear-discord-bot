@@ -21,11 +21,13 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  PermissionFlagsBits,
   Partials,
 } from 'discord.js';
 import { childLogger } from './logger.js';
 import {
   MAX_TITLE_LENGTH,
+  escapeMarkdown,
   findTagId,
   formatIssueDescription,
   labelNamesFor,
@@ -58,6 +60,7 @@ export function createBot({ config, store, linear }) {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds, // guild + thread lifecycle events
+      GatewayIntentBits.GuildMembers, // privileged: enumerate members to resolve a forum's moderators
       GatewayIntentBits.MessageContent, // privileged: read the starter message body for issue descriptions
     ],
     // Threads/messages may arrive uncached; partials keep events flowing.
@@ -125,7 +128,7 @@ export function createBot({ config, store, linear }) {
       warnOnce(
         `type:${parent.id}`,
         { channelId: parent.id, channel: parent.name, type: ChannelType[parent.type], guild: forumCfg.guildName },
-        'Configured channel is not a forum channel (GuildForum); ignoring it — fix config.yml',
+        'Configured channel is not a forum channel (GuildForum); ignoring it - fix config.yml',
       );
       return null;
     }
@@ -150,6 +153,60 @@ export function createBot({ config, store, linear }) {
         ? [...starter.attachments.values()].map((a) => ({ name: a.name, url: a.url }))
         : [],
     });
+  }
+
+  /** Guilds whose full member list we've fetched (kept fresh by gateway member events). */
+  const membersFetched = new Set();
+
+  /**
+   * Notify ONLY this forum's moderators: the members who hold the configured
+   * moderator permission ON the forum channel (so the announcement is visible
+   * to nobody else). Sent as DMs; nothing is posted in the public thread.
+   * Failures (DMs closed, missing intent, etc.) are logged, never thrown; the
+   * Linear issue already exists.
+   */
+  async function notifyForumModerators(forumChannel, forumCfg, message) {
+    const permission = PermissionFlagsBits[forumCfg.moderatorPermission];
+    const guild = forumChannel.guild;
+
+    // Fetch the member list once per guild; gateway member events keep it fresh.
+    try {
+      if (!membersFetched.has(guild.id)) {
+        await guild.members.fetch();
+        membersFetched.add(guild.id);
+      }
+    } catch (err) {
+      warnOnce(`members:${guild.id}`, { guildId: guild.id, err: err.message },
+        'Could not fetch guild members to resolve forum moderators; enable the Server Members Intent in the Developer Portal');
+      return;
+    }
+
+    // A member is a moderator of THIS forum if they hold the permission on the
+    // forum channel itself (role perms + channel overwrites; admins/owner too).
+    const moderators = guild.members.cache.filter(
+      (m) => !m.user.bot && forumChannel.permissionsFor(m)?.has(permission),
+    );
+
+    if (moderators.size === 0) {
+      log.warn({ channelId: forumChannel.id, permission: forumCfg.moderatorPermission },
+        'No moderators found for this forum; issue announcement not delivered to anyone');
+      return;
+    }
+
+    let delivered = 0;
+    for (const moderator of moderators.values()) {
+      try {
+        await moderator.send(message);
+        delivered += 1;
+      } catch (err) {
+        log.warn({ userId: moderator.id, err: err.message },
+          'Could not DM a forum moderator (DMs closed / not reachable?)');
+      }
+    }
+    log.debug(
+      { channelId: forumChannel.id, moderators: moderators.size, delivered },
+      'Notified forum moderators of created issue',
+    );
   }
 
   /**
@@ -182,7 +239,7 @@ export function createBot({ config, store, linear }) {
 
       // Persist BEFORE announcing: if the reply fails we still never duplicate.
       // A failed persist keeps the entry in memory (dedupe holds until restart)
-      // but is logged loudly so an operator can reconcile — a restart could
+      // but is logged as an error so an operator can reconcile; a restart could
       // otherwise re-create this issue.
       try {
         await store.set(thread.id, {
@@ -196,7 +253,7 @@ export function createBot({ config, store, linear }) {
       } catch (err) {
         log.error(
           { err, threadId: thread.id, issue: issue.identifier },
-          'Created Linear issue but FAILED to persist the dedupe record; a restart may create a duplicate — reconcile manually',
+          'Created Linear issue but FAILED to persist the dedupe record; a restart may create a duplicate - reconcile manually',
         );
       }
 
@@ -205,12 +262,12 @@ export function createBot({ config, store, linear }) {
         'Created Linear issue from forum thread',
       );
 
-      try {
-        await thread.send(`Created Linear issue **${issue.identifier}** for this thread: ${issue.url}`);
-      } catch (err) {
-        log.warn({ threadId: thread.id, issue: issue.identifier, err: err.message },
-          'Issue created but could not post confirmation in the thread (missing permissions?)');
-      }
+      // Notify ONLY this forum's moderators (via DM); nothing is posted in the
+      // public thread. The message links back to the thread as the source.
+      const message =
+        `Linear issue **${issue.identifier}** created from forum thread ` +
+        `**${escapeMarkdown(thread.name)}** - <${thread.url}>\n${issue.url}`;
+      await notifyForumModerators(forumChannel, forumCfg, message);
     } finally {
       inFlight.delete(thread.id);
     }
@@ -235,7 +292,7 @@ export function createBot({ config, store, linear }) {
 
   client.on(Events.ThreadCreate, async (thread, newlyCreated) => {
     // Discord also emits ThreadCreate when the bot gains access to an
-    // existing thread — only genuinely new threads matter here.
+    // existing thread; only newly created threads matter here.
     if (!newlyCreated) return;
     try {
       await maybeHandle(thread, { previousTagIds: [], trigger: 'thread-create' });
@@ -272,7 +329,7 @@ export function createBot({ config, store, linear }) {
     for (const [guildId, forums] of routes) {
       const guild = readyClient.guilds.cache.get(guildId);
       if (!guild) {
-        log.warn({ guildId }, 'Configured guild not found — is the bot invited to this server?');
+        log.warn({ guildId }, 'Configured guild not found; is the bot invited to this server?');
         continue;
       }
       for (const [channelId, forumCfg] of forums) {

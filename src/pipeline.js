@@ -15,7 +15,7 @@ export const MAX_DESCRIPTION_LENGTH = 40_000;
 const DISCORD_CDN_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
 
 export function truncate(text, max) {
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
 }
 
 /**
@@ -64,7 +64,7 @@ export function tagNamesFromIds(availableTags, appliedTagIds) {
 }
 
 /**
- * THE core trigger rule: an issue is created only when the trigger tag
+ * The core trigger rule: an issue is created only when the trigger tag
  * transitions absent -> present. Re-saving an already-present tag, removing
  * it, or adding unrelated tags never fires. Thread creation is modeled as
  * `previousTagIds = []`, so a thread born with the tag fires too.
@@ -120,7 +120,7 @@ export function formatIssueDescription({ threadName, threadUrl, authorTag, conte
   parts.push('---');
 
   // User content is quoted and clearly labelled so it can't masquerade as
-  // bot-authored structure (e.g. forge its own "Created from…" footer).
+  // bot-authored structure (e.g. forge its own "Created from..." footer).
   if (content?.trim()) {
     const body = truncate(content.trim(), MAX_DESCRIPTION_LENGTH);
     const quoted = body.split('\n').map((line) => `> ${line}`).join('\n');

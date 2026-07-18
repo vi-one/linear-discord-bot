@@ -19,7 +19,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 /** Drain a paginated Linear SDK connection into a plain array.
  *
  * `fetchNext()` mutates the connection, accumulating every page's nodes into
- * `connection.nodes` and returning the same object — so we page to the end
+ * `connection.nodes` and returning the same object, so we page to the end
  * and read the final, complete `nodes` once (reading it earlier would double
  * up the first page).
  */
@@ -66,7 +66,7 @@ export class LinearService {
   /** Verify the API key works and log who we are. Throws on auth failure. */
   async verifyAuth() {
     const viewer = await this.client.viewer;
-    // Name only — the account email is PII we don't need in logs.
+    // Name only; the account email is PII we don't need in logs.
     log.info({ user: viewer.name }, 'Authenticated with Linear');
   }
 

@@ -17,7 +17,7 @@ WORKDIR /app
 # Install production dependencies first for layer caching. `npm ci` needs a
 # lockfile; fall back to `npm install` when building without one.
 # --ignore-scripts blocks dependency lifecycle (postinstall) scripts from
-# running at build time — supply-chain hardening; none of the runtime deps
+# running at build time (supply-chain hardening); none of the runtime deps
 # need them to function.
 COPY package.json package-lock.json* ./
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev --ignore-scripts; else npm install --omit=dev --ignore-scripts; fi \

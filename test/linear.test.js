@@ -125,7 +125,7 @@ describe('resolveTeam', () => {
     await assert.rejects(svc.resolveTeam('NOPE'), /No Linear team found with key "NOPE"/);
   });
 
-  test('a rejected lookup is NOT cached — the next call retries', async () => {
+  test('a rejected lookup is NOT cached; the next call retries', async () => {
     let failures = 0;
     const client = makeFakeClient();
     client.teams = async (args) => {

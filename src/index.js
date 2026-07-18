@@ -31,7 +31,7 @@ async function main() {
   try {
     await linear.verifyAuth();
   } catch (err) {
-    logger.fatal({ err: err.message }, 'Linear authentication failed — check LINEAR_API_KEY');
+    logger.fatal({ err: err.message }, 'Linear authentication failed; check LINEAR_API_KEY');
     process.exit(1);
   }
 
@@ -46,7 +46,7 @@ async function main() {
       process.exit(130);
     }
     shuttingDown = true;
-    logger.info({ signal }, 'Shutting down…');
+    logger.info({ signal }, 'Shutting down');
     try {
       await bot.stop();
       await store.flush();
@@ -61,12 +61,12 @@ async function main() {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   // Last-resort safety nets: log, do not crash the whole bot on a stray
-  // rejection from a third-party lib; genuinely unknown exceptions still exit.
+  // rejection from a third-party lib; uncaught exceptions still exit.
   process.on('unhandledRejection', (reason) => {
     logger.error({ err: reason }, 'Unhandled promise rejection');
   });
   process.on('uncaughtException', (err) => {
-    logger.fatal({ err }, 'Uncaught exception — exiting');
+    logger.fatal({ err }, 'Uncaught exception; exiting');
     process.exit(1);
   });
 

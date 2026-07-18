@@ -19,7 +19,7 @@ const {
   formatIssueDescription,
 } = await import('../src/pipeline.js');
 
-describe('shouldTrigger — the core "issue only on tag appearing" rule', () => {
+describe('shouldTrigger: the core "issue only on tag appearing" rule', () => {
   const TAG = 'trigger-tag-id';
 
   test('fires on absent -> present transition', () => {
@@ -161,9 +161,9 @@ describe('formatIssueDescription', () => {
 
   test('a malicious thread name cannot break out of the provenance link', () => {
     const out = formatIssueDescription({ ...base, threadName: 'x](http://evil)' });
-    // The unescaped breakout sequence must not survive…
+    // The unescaped breakout sequence must not survive...
     assert.ok(!out.includes('](http://evil)'));
-    // …and the real thread URL is still the link target.
+    // ...and the real thread URL is still the link target.
     assert.ok(out.includes(`](${base.threadUrl})`));
     assert.ok(out.includes('x\\]\\(http://evil\\)'));
   });
@@ -230,17 +230,17 @@ describe('truncate', () => {
     assert.equal(truncate('x'.repeat(250), 250), 'x'.repeat(250)); // exactly at limit
   });
 
-  test('text over the limit ends with … and fits within max', () => {
+  test('text over the limit ends with ... and fits within max', () => {
     const out = truncate('x'.repeat(300), MAX_TITLE_LENGTH);
     assert.equal(out.length, MAX_TITLE_LENGTH);
-    assert.ok(out.endsWith('…'));
+    assert.ok(out.endsWith('...'));
     assert.ok(out.length <= MAX_TITLE_LENGTH);
   });
 
   test('description limit constant is respected', () => {
     const out = truncate('y'.repeat(MAX_DESCRIPTION_LENGTH + 5), MAX_DESCRIPTION_LENGTH);
     assert.equal(out.length, MAX_DESCRIPTION_LENGTH);
-    assert.ok(out.endsWith('…'));
+    assert.ok(out.endsWith('...'));
   });
 });
 

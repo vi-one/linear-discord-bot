@@ -7,7 +7,7 @@
  *
  * Writes are atomic and durable: we write to a randomly-named temp file in the
  * same directory (0600, exclusive-create so a symlink can't be pre-planted),
- * fsync it, then rename it over the real file — a crash mid-write never
+ * fsync it, then rename it over the real file, so a crash mid-write never
  * corrupts or reverts the store. Writes are serialized through a promise chain
  * so concurrent saves cannot interleave, and a failed write REJECTS to the
  * caller so the caller can react instead of silently losing the entry.

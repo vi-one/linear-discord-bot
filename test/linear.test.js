@@ -39,12 +39,26 @@ function makeFakeClient({
   teamLabels = [],
   createdIssue = { id: 'issue-1', identifier: 'ENG-42', url: 'https://linear.app/x/issue/ENG-42', title: 'T' },
   createIssueSuccess = true,
+  createdCommentId = 'comment-1',
+  createCommentSuccess = true,
+  updateCommentSuccess = true,
+  // Pages served by the raw GraphQL comments query, in request order:
+  // each entry is a full { nodes, pageInfo } connection object.
+  commentPages = [{ nodes: [], pageInfo: { hasNextPage: false } }],
 } = {}) {
-  const calls = { team: [], teams: [], issueLabels: [], createIssue: [] };
+  const calls = { team: [], teams: [], issueLabels: [], createIssue: [], createComment: [], updateComment: [], deleteComment: [], rawRequest: [] };
   const client = {
     calls,
     get viewer() {
-      return Promise.resolve({ name: 'Test User' });
+      return Promise.resolve({ id: 'viewer-1', name: 'Test User' });
+    },
+    // The nested LinearGraphQLClient surface used by pollComments.
+    client: {
+      async rawRequest(query, variables) {
+        calls.rawRequest.push({ query, variables });
+        const page = commentPages[Math.min(calls.rawRequest.length - 1, commentPages.length - 1)];
+        return { data: { comments: page } };
+      },
     },
     async team(id) {
       calls.team.push(id);
@@ -64,6 +78,21 @@ function makeFakeClient({
     async createIssue(input) {
       calls.createIssue.push(input);
       return { success: createIssueSuccess, issue: Promise.resolve(createIssueSuccess ? createdIssue : null) };
+    },
+    async createComment(input) {
+      calls.createComment.push(input);
+      return {
+        success: createCommentSuccess,
+        comment: Promise.resolve(createCommentSuccess ? { id: createdCommentId } : null),
+      };
+    },
+    async updateComment(id, input) {
+      calls.updateComment.push([id, input]);
+      return { success: updateCommentSuccess, comment: Promise.resolve({ id }) };
+    },
+    async deleteComment(id) {
+      calls.deleteComment.push(id);
+      return { success: true };
     },
   };
   return client;
@@ -214,9 +243,145 @@ describe('createIssueFromThread', () => {
   });
 });
 
+describe('comment sync methods', () => {
+  test('createComment passes issueId + body and returns the comment id', async () => {
+    const client = makeFakeClient({ createdCommentId: 'comment-77' });
+    const svc = new LinearService('key', client);
+    const id = await svc.createComment('issue-1', 'the body');
+    assert.deepEqual(client.calls.createComment, [{ issueId: 'issue-1', body: 'the body' }]);
+    assert.equal(id, 'comment-77');
+  });
+
+  test('createComment rejects when Linear reports success=false', async () => {
+    const client = makeFakeClient({ createCommentSuccess: false });
+    const svc = new LinearService('key', client);
+    await assert.rejects(svc.createComment('issue-1', 'body'), /success=false/);
+  });
+
+  test('updateComment passes the id and { body }', async () => {
+    const client = makeFakeClient();
+    const svc = new LinearService('key', client);
+    await svc.updateComment('comment-1', 'new body');
+    assert.deepEqual(client.calls.updateComment, [['comment-1', { body: 'new body' }]]);
+  });
+
+  test('updateComment rejects when Linear reports success=false', async () => {
+    const client = makeFakeClient({ updateCommentSuccess: false });
+    const svc = new LinearService('key', client);
+    await assert.rejects(svc.updateComment('comment-1', 'body'), /success=false/);
+  });
+
+  test('deleteComment passes the id', async () => {
+    const client = makeFakeClient();
+    const svc = new LinearService('key', client);
+    await svc.deleteComment('comment-9');
+    assert.deepEqual(client.calls.deleteComment, ['comment-9']);
+  });
+});
+
 describe('verifyAuth', () => {
   test('resolves when the client viewer is reachable', async () => {
     const svc = new LinearService('key', makeFakeClient());
     await svc.verifyAuth(); // must not throw
+  });
+
+  test('stores the viewer id for loop prevention', async () => {
+    const svc = new LinearService('key', makeFakeClient());
+    await svc.verifyAuth();
+    assert.equal(svc.viewerId, 'viewer-1');
+  });
+});
+
+describe('pollComments', () => {
+  const SINCE = '2026-07-18T00:00:00.000Z';
+
+  test('passes the updatedAt.gt filter and normalizes nodes', async () => {
+    const client = makeFakeClient({
+      commentPages: [{
+        nodes: [
+          {
+            id: 'c1',
+            body: 'hello',
+            url: 'https://linear.app/x/issue/ENG-1#comment-c1',
+            createdAt: '2026-07-18T01:00:00.000Z',
+            updatedAt: '2026-07-18T01:00:00.000Z',
+            user: { id: 'u1', name: 'Real Name', displayName: 'Disp' },
+            issue: { id: 'issue-1' },
+          },
+          {
+            id: 'c2',
+            body: null,
+            url: null,
+            createdAt: '2026-07-18T02:00:00.000Z',
+            updatedAt: '2026-07-18T02:00:00.000Z',
+            user: { id: 'u2', name: 'Only Name' },
+            issue: null,
+          },
+          {
+            id: 'c3',
+            body: 'no user',
+            url: null,
+            createdAt: '2026-07-18T03:00:00.000Z',
+            updatedAt: '2026-07-18T03:00:00.000Z',
+            user: null,
+            issue: { id: 'issue-3' },
+          },
+        ],
+        pageInfo: { hasNextPage: false },
+      }],
+    });
+    const svc = new LinearService('key', client);
+    const out = await svc.pollComments(SINCE);
+
+    assert.equal(client.calls.rawRequest.length, 1);
+    assert.deepEqual(client.calls.rawRequest[0].variables, {
+      filter: { updatedAt: { gt: SINCE } },
+      after: null,
+    });
+
+    assert.equal(out.length, 3);
+    assert.deepEqual(out[0], {
+      id: 'c1',
+      body: 'hello',
+      url: 'https://linear.app/x/issue/ENG-1#comment-c1',
+      updatedAt: '2026-07-18T01:00:00.000Z',
+      authorId: 'u1',
+      authorName: 'Disp', // displayName wins over name
+      issueId: 'issue-1',
+    });
+    assert.equal(out[1].body, ''); // null body -> empty string
+    assert.equal(out[1].url, null);
+    assert.equal(out[1].authorName, 'Only Name'); // falls back to user.name
+    assert.equal(out[1].issueId, null); // null issue -> null issueId
+    assert.equal(out[2].authorId, null); // no user
+    assert.equal(out[2].authorName, 'Linear'); // no user -> fallback name
+    assert.equal(out[2].issueId, 'issue-3');
+  });
+
+  test('follows pagination across two pages using endCursor', async () => {
+    const node = (id) => ({
+      id,
+      body: 'b',
+      url: null,
+      createdAt: '2026-07-18T01:00:00.000Z',
+      updatedAt: '2026-07-18T01:00:00.000Z',
+      user: { id: 'u1', name: 'N' },
+      issue: { id: 'issue-1' },
+    });
+    const client = makeFakeClient({
+      commentPages: [
+        { nodes: [node('c1'), node('c2')], pageInfo: { hasNextPage: true, endCursor: 'cursor-1' } },
+        { nodes: [node('c3')], pageInfo: { hasNextPage: false } },
+      ],
+    });
+    const svc = new LinearService('key', client);
+    const out = await svc.pollComments(SINCE);
+
+    assert.equal(client.calls.rawRequest.length, 2);
+    assert.equal(client.calls.rawRequest[0].variables.after, null);
+    assert.equal(client.calls.rawRequest[1].variables.after, 'cursor-1');
+    // Both pages keep the same filter.
+    assert.deepEqual(client.calls.rawRequest[1].variables.filter, { updatedAt: { gt: SINCE } });
+    assert.deepEqual(out.map((c) => c.id), ['c1', 'c2', 'c3']);
   });
 });

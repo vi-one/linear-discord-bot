@@ -66,8 +66,47 @@ export class LinearService {
   /** Verify the API key works and log who we are. Throws on auth failure. */
   async verifyAuth() {
     const viewer = await this.client.viewer;
+    // Remember our own user id so the comment poller can skip comments the
+    // bot itself created (loop prevention for two-way sync).
+    this.viewerId = viewer.id;
     // Name only; the account email is PII we don't need in logs.
     log.info({ user: viewer.name }, 'Authenticated with Linear');
+  }
+
+  /**
+   * Poll all workspace comments updated since `sinceIso` via raw GraphQL,
+   * following pagination, and return them as plain normalized objects.
+   *
+   * @param {string} sinceIso ISO timestamp; only comments with updatedAt > this are returned.
+   * @returns {Promise<{id: string, body: string, url: string | null, updatedAt: string,
+   *   authorId: string | null, authorName: string, issueId: string | null}[]>}
+   */
+  async pollComments(sinceIso) {
+    const query = `query BotPollComments($filter: CommentFilter, $after: String) {
+      comments(filter: $filter, first: 100, after: $after) {
+        nodes { id body url createdAt updatedAt user { id name displayName } issue { id } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }`;
+    const out = [];
+    let after = null;
+    do {
+      const res = await this.client.client.rawRequest(query, { filter: { updatedAt: { gt: sinceIso } }, after });
+      const conn = res.data.comments;
+      for (const n of conn.nodes) {
+        out.push({
+          id: n.id,
+          body: n.body ?? '',
+          url: n.url ?? null,
+          updatedAt: n.updatedAt,
+          authorId: n.user?.id ?? null,
+          authorName: n.user?.displayName ?? n.user?.name ?? 'Linear',
+          issueId: n.issue?.id ?? null,
+        });
+      }
+      after = conn.pageInfo?.hasNextPage ? conn.pageInfo.endCursor : null;
+    } while (after);
+    return out;
   }
 
   /**
@@ -179,5 +218,32 @@ export class LinearService {
       throw new Error('Linear created the issue but did not return it');
     }
     return { id: issue.id, identifier: issue.identifier, url: issue.url, title: issue.title };
+  }
+
+  /**
+   * Create a comment on an issue. Returns the comment id so the caller can
+   * track it for later edits/deletes.
+   *
+   * @param {string} issueId
+   * @param {string} body
+   * @returns {Promise<string>} the created comment's id
+   */
+  async createComment(issueId, body) {
+    const payload = await this.client.createComment({ issueId, body });
+    if (!payload.success) throw new Error('Linear rejected the comment creation (success=false)');
+    const comment = await payload.comment;
+    if (!comment) throw new Error('Linear created the comment but did not return it');
+    return comment.id;
+  }
+
+  /** Replace a comment's body. */
+  async updateComment(commentId, body) {
+    const payload = await this.client.updateComment(commentId, { body });
+    if (!payload.success) throw new Error('Linear rejected the comment update (success=false)');
+  }
+
+  /** Delete a comment. */
+  async deleteComment(commentId) {
+    await this.client.deleteComment(commentId);
   }
 }

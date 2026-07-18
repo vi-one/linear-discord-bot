@@ -62,6 +62,9 @@ describe('loadConfig', () => {
     assert.equal(config.linear.apiKey, 'lin_test_key_value');
     assert.equal(config.discord.token, 'discord_test_token_value');
 
+    // The example sets the comment-poll interval explicitly.
+    assert.equal(config.linear.pollCommentsSeconds, 60);
+
     // Two guilds, with the expected forums.
     assert.equal(config.guilds.length, 2);
     assert.equal(config.guilds[0].id, '111111111111111111');
@@ -73,6 +76,12 @@ describe('loadConfig', () => {
     assert.equal(config.guilds[0].forums[0].triggerTag, 'TODO'); // explicit
     assert.equal(config.guilds[0].forums[1].triggerTag, 'TODO'); // inherited default
     assert.equal(config.guilds[1].forums[0].triggerTag, 'Escalate'); // per-forum override
+
+    // Message sync: explicit default true, inherited by forums, OPS forum overrides.
+    assert.equal(config.defaults.syncMessages, true);
+    assert.equal(config.guilds[0].forums[0].syncMessages, true); // inherited default
+    assert.equal(config.guilds[0].forums[1].syncMessages, true); // inherited default
+    assert.equal(config.guilds[1].forums[0].syncMessages, false); // per-forum override
 
     // labelMap / defaultLabels normalized shapes.
     assert.deepEqual(config.guilds[0].forums[0].labelMap, {
@@ -192,5 +201,97 @@ guilds:
     const forum = config.guilds[0].forums[0];
     assert.deepEqual(forum.labelMap, {});
     assert.deepEqual(forum.defaultLabels, []);
+  });
+
+  test('per-forum syncMessages: false overrides defaults.syncMessages: true', () => {
+    const p = writeYaml(`
+linear:
+  apiKey: \${LINEAR_API_KEY}
+discord:
+  token: \${DISCORD_TOKEN}
+defaults:
+  syncMessages: true
+guilds:
+  - id: "12345678901234567"
+    forums:
+      - channelId: "76543210987654321"
+        team: ENG
+        syncMessages: false
+`);
+    const config = loadConfig(p);
+    assert.equal(config.defaults.syncMessages, true);
+    assert.equal(config.guilds[0].forums[0].syncMessages, false);
+  });
+
+  test('a non-boolean syncMessages is rejected', () => {
+    const p = writeYaml(validYaml(`
+  - id: "12345678901234567"
+    forums:
+      - channelId: "76543210987654321"
+        team: ENG
+        syncMessages: "yes"
+`));
+    assertConfigError(p, /must be true or false/);
+  });
+
+  test('a forum with nothing set inherits the default syncMessages: true', () => {
+    const p = writeYaml(validYaml(`
+  - id: "12345678901234567"
+    forums:
+      - channelId: "76543210987654321"
+        team: ENG
+`));
+    const config = loadConfig(p);
+    assert.equal(config.defaults.syncMessages, true);
+    assert.equal(config.guilds[0].forums[0].syncMessages, true);
+  });
+
+  /** A valid config body with a custom linear.pollCommentsSeconds line. */
+  function yamlWithPollSeconds(value) {
+    return `
+linear:
+  apiKey: \${LINEAR_API_KEY}
+  pollCommentsSeconds: ${value}
+discord:
+  token: \${DISCORD_TOKEN}
+guilds:
+  - id: "12345678901234567"
+    forums:
+      - channelId: "76543210987654321"
+        team: ENG
+`;
+  }
+
+  test('a custom linear.pollCommentsSeconds integer is kept', () => {
+    const config = loadConfig(writeYaml(yamlWithPollSeconds('300')));
+    assert.equal(config.linear.pollCommentsSeconds, 300);
+  });
+
+  test('linear.pollCommentsSeconds: 0 is accepted (polling disabled)', () => {
+    const config = loadConfig(writeYaml(yamlWithPollSeconds('0')));
+    assert.equal(config.linear.pollCommentsSeconds, 0);
+  });
+
+  test('a negative linear.pollCommentsSeconds is rejected', () => {
+    assertConfigError(writeYaml(yamlWithPollSeconds('-5')), /non-negative integer/);
+  });
+
+  test('a non-integer linear.pollCommentsSeconds is rejected', () => {
+    assertConfigError(writeYaml(yamlWithPollSeconds('1.5')), /non-negative integer/);
+  });
+
+  test('a non-numeric linear.pollCommentsSeconds is rejected', () => {
+    assertConfigError(writeYaml(yamlWithPollSeconds('"soon"')), /non-negative integer/);
+  });
+
+  test('omitting linear.pollCommentsSeconds defaults to 60', () => {
+    const p = writeYaml(validYaml(`
+  - id: "12345678901234567"
+    forums:
+      - channelId: "76543210987654321"
+        team: ENG
+`));
+    const config = loadConfig(p);
+    assert.equal(config.linear.pollCommentsSeconds, 60);
   });
 });

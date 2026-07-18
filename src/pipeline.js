@@ -11,6 +11,10 @@
 export const MAX_TITLE_LENGTH = 250;
 /** Keep descriptions bounded so a pathological post can't blow up the API call. */
 export const MAX_DESCRIPTION_LENGTH = 40_000;
+/** Same bound for mirrored thread messages posted as Linear comments. */
+export const MAX_COMMENT_LENGTH = 40_000;
+/** Discord's hard cap on message length. */
+export const MAX_DISCORD_MESSAGE = 2000;
 /** Attachment links are only trusted when served from Discord's own CDN. */
 const DISCORD_CDN_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
 
@@ -137,4 +141,45 @@ export function formatIssueDescription({ threadName, threadUrl, authorTag, conte
   }
 
   return parts.join('\n\n');
+}
+
+/**
+ * Shape a thread message into Linear comment markdown. Same trust rules as
+ * formatIssueDescription: author and attachment names are escaped, and only
+ * Discord-CDN attachment links are rendered.
+ *
+ * @param {{
+ *   authorTag: string | null,
+ *   content: string | null,
+ *   attachments: {name: string, url: string}[] | null,
+ * }} input
+ * @returns {string}
+ */
+export function formatComment({ authorTag, content, attachments }) {
+  const author = authorTag ? escapeMarkdown(authorTag) : 'unknown';
+  const parts = [`**${author}** on Discord:`];
+  const text = (content ?? '').trim();
+  parts.push(text ? truncate(text, MAX_COMMENT_LENGTH) : '*(no text content)*');
+  const links = (attachments ?? [])
+    .filter((a) => isDiscordCdnUrl(a.url))
+    .map((a) => `- [${escapeMarkdown(a.name)}](${a.url})`);
+  if (links.length) parts.push(`**Attachments**\n${links.join('\n')}`);
+  return parts.join('\n\n');
+}
+
+/**
+ * Shape a Linear comment into a Discord message for the reverse sync
+ * (Linear -> Discord). The body is truncated so the whole message stays
+ * within Discord's 2000-char cap; the url is wrapped in <> to suppress
+ * the embed preview.
+ *
+ * @param {{authorName: string | null, body: string | null, url: string | null}} input
+ * @returns {string}
+ */
+export function formatLinearComment({ authorName, body, url }) {
+  const header = `**${(authorName || 'Linear').replace(/\*/g, '')}** commented on Linear:`;
+  const link = url ? `\n\n<${url}>` : '';
+  const room = MAX_DISCORD_MESSAGE - header.length - link.length - 2; // 2 for the blank line
+  const text = truncate((body || '').trim() || '(no text)', Math.max(0, room));
+  return `${header}\n\n${text}${link}`;
 }

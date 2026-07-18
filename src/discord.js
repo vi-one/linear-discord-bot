@@ -27,7 +27,9 @@ import { childLogger } from './logger.js';
 import {
   MAX_TITLE_LENGTH,
   findTagId,
+  formatComment,
   formatIssueDescription,
+  formatLinearComment,
   labelNamesFor,
   shouldTrigger,
   tagNamesFromIds,
@@ -35,6 +37,10 @@ import {
 } from './pipeline.js';
 
 const log = childLogger('discord');
+
+// Reserved store key (not a snowflake) that persists the last poll time for
+// the Linear -> Discord comment sync inside the existing store.
+const POLL_STATE_KEY = '#linear-poll-state';
 
 /**
  * Build the routing table: guildId -> (channelId -> forum config).
@@ -58,6 +64,7 @@ export function createBot({ config, store, linear }) {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds, // guild + thread lifecycle events
+      GatewayIntentBits.GuildMessages, // message create/update/delete events in threads (non-privileged)
       GatewayIntentBits.MessageContent, // privileged: read the starter message body for issue descriptions
     ],
     // Threads/messages may arrive uncached; partials keep events flowing.
@@ -70,8 +77,13 @@ export function createBot({ config, store, linear }) {
   const routes = buildRoutes(config);
   /** Threads currently being processed, to serialize racing events. */
   const inFlight = new Set();
+  /** Message IDs currently being mirrored to Linear, to serialize racing events. */
+  const commentInFlight = new Set();
   /** Keys we already warned about, to avoid log spam on every event. */
   const warned = new Set();
+  /** Timer + reentrancy guard for the Linear comment poller. */
+  let pollTimer = null;
+  let polling = false;
 
   /** Log a warning only once per key (shared by the event path and startup audit). */
   function warnOnce(key, fields, message) {
@@ -227,6 +239,143 @@ export function createBot({ config, store, linear }) {
     await processThread(thread, forumCfg, forumChannel, trigger);
   }
 
+  // --- Message sync: mirror thread messages as Linear comments -------------
+
+  // The thread's issue record + its forum config, if this message belongs to a
+  // managed thread that has an issue and has message-sync enabled. channelId of a
+  // thread message equals the thread id; rec.channelId is the parent forum id.
+  function commentContextFor(message) {
+    const rec = store.get(message.channelId);
+    if (!rec) return null;
+    const forumCfg = routes.get(message.guildId)?.get(rec.channelId);
+    if (!forumCfg || !forumCfg.syncMessages) return null;
+    return { rec, forumCfg };
+  }
+
+  /** Shape a discord.js message into formatComment input. */
+  function commentInputFrom(message) {
+    return {
+      authorTag: message.author?.tag ?? message.author?.username ?? null,
+      content: message.content ?? null,
+      attachments: [...(message.attachments?.values() ?? [])].map((a) => ({ name: a.name, url: a.url })),
+    };
+  }
+
+  async function handleMessageCreate(message) {
+    // Mirrored Linear comments are bot-authored, so this guard also stops them
+    // from being synced back to Linear (no loop).
+    if (message.author?.bot || message.system) return;
+    if (message.id === message.channelId) return; // forum starter message is already the issue description
+    const ctx = commentContextFor(message);
+    if (!ctx) return;
+    if (ctx.rec.comments?.[message.id] || commentInFlight.has(message.id)) return;
+    commentInFlight.add(message.id);
+    try {
+      if (ctx.rec.comments?.[message.id]) return;
+      const commentId = await linear.createComment(ctx.rec.issueId, formatComment(commentInputFrom(message)));
+      ctx.rec.comments ??= {};
+      ctx.rec.comments[message.id] = commentId;
+      await store.set(message.channelId, ctx.rec);
+      log.debug({ threadId: message.channelId, messageId: message.id, comment: commentId }, 'Synced Discord message to Linear comment');
+    } finally {
+      commentInFlight.delete(message.id);
+    }
+  }
+
+  async function handleMessageUpdate(oldMessage, newMessage) {
+    let msg = newMessage;
+    if (msg.partial) { try { msg = await msg.fetch(); } catch { return; } }
+    if (msg.author?.bot || msg.system) return;
+    const ctx = commentContextFor(msg);
+    if (!ctx) return;
+    const commentId = ctx.rec.comments?.[msg.id];
+    if (!commentId) return; // message was never synced
+    if (!oldMessage?.partial && oldMessage?.content === msg.content) return; // no content change (embed load, pin, etc.)
+    await linear.updateComment(commentId, formatComment(commentInputFrom(msg)));
+    log.debug({ threadId: msg.channelId, messageId: msg.id, comment: commentId }, 'Updated Linear comment from edited message');
+  }
+
+  // Works with partial messages: only ids are needed to find the mapping.
+  async function handleMessageDelete(message) {
+    const rec = store.get(message.channelId);
+    const commentId = rec?.comments?.[message.id];
+    if (!commentId) return;
+    const forumCfg = routes.get(message.guildId)?.get(rec.channelId);
+    if (forumCfg && !forumCfg.syncMessages) return; // sync off; leave it. (If unresolvable, still clean up.)
+    await linear.deleteComment(commentId);
+    delete rec.comments[message.id];
+    await store.set(message.channelId, rec);
+    log.debug({ threadId: message.channelId, messageId: message.id, comment: commentId }, 'Deleted Linear comment for deleted message');
+  }
+
+  // --- Reverse sync: poll Linear comments into Discord threads -------------
+
+  // Reverse index: Linear issue id -> tracked thread. Skips the reserved
+  // poll-state record and any record without an issueId.
+  function issueThreadIndex() {
+    const idx = new Map();
+    for (const [threadId, rec] of store.entries) {
+      if (rec?.issueId) idx.set(rec.issueId, { threadId, rec });
+    }
+    return idx;
+  }
+
+  // Mirror one Linear comment into its Discord thread (create or edit).
+  // Persists the commentId -> discord messageId mapping in rec.linearComments.
+  async function mirrorLinearComment(threadId, rec, comment) {
+    const body = formatLinearComment({ authorName: comment.authorName, body: comment.body, url: comment.url });
+    let channel;
+    try {
+      channel = await client.channels.fetch(threadId);
+    } catch (err) {
+      log.warn({ threadId, commentId: comment.id, err: err.message }, 'Could not fetch thread to mirror Linear comment');
+      return;
+    }
+    if (!channel?.isTextBased?.()) return;
+    rec.linearComments ??= {};
+    const existingMsgId = rec.linearComments[comment.id];
+    try {
+      if (existingMsgId) {
+        const msg = await channel.messages.fetch(existingMsgId).catch(() => null);
+        if (msg) { await msg.edit(body); return; }
+      }
+      const sent = await channel.send(body);
+      rec.linearComments[comment.id] = sent.id;
+      await store.set(threadId, rec);
+    } catch (err) {
+      log.warn({ threadId, commentId: comment.id, err: err.message }, 'Could not post/edit Linear comment in thread');
+    }
+  }
+
+  // One poll cycle: fetch comments updated since the last cycle and mirror
+  // them. Non-overlapping (polling guard); skips the bot's own comments and
+  // untracked issues; only forums with syncMessages on.
+  async function pollLinearComments() {
+    if (polling) return;
+    polling = true;
+    try {
+      const stored = store.get(POLL_STATE_KEY);
+      const since = stored?.lastPollAt ?? new Date().toISOString();
+      const nextSince = new Date().toISOString();
+      const comments = await linear.pollComments(since);
+      const index = issueThreadIndex();
+      for (const comment of comments) {
+        if (!comment.issueId) continue;
+        if (comment.authorId && comment.authorId === linear.viewerId) continue; // our own comment (originated from Discord)
+        const target = index.get(comment.issueId);
+        if (!target) continue; // not a tracked issue
+        const forumCfg = routes.get(target.rec.guildId)?.get(target.rec.channelId);
+        if (!forumCfg || !forumCfg.syncMessages) continue;
+        await mirrorLinearComment(target.threadId, target.rec, comment);
+      }
+      await store.set(POLL_STATE_KEY, { lastPollAt: nextSince });
+    } catch (err) {
+      log.error({ err }, 'Linear comment poll cycle failed');
+    } finally {
+      polling = false;
+    }
+  }
+
   client.on(Events.ThreadCreate, async (thread, newlyCreated) => {
     // Discord also emits ThreadCreate when the bot gains access to an
     // existing thread; only newly created threads matter here.
@@ -249,9 +398,33 @@ export function createBot({ config, store, linear }) {
     }
   });
 
+  client.on(Events.MessageCreate, async (message) => {
+    try { await handleMessageCreate(message); } catch (err) { log.error({ err, messageId: message.id }, 'Failed handling MessageCreate'); }
+  });
+
+  client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
+    try { await handleMessageUpdate(oldMessage, newMessage); } catch (err) { log.error({ err, messageId: newMessage?.id }, 'Failed handling MessageUpdate'); }
+  });
+
+  client.on(Events.MessageDelete, async (message) => {
+    try { await handleMessageDelete(message); } catch (err) { log.error({ err, messageId: message?.id }, 'Failed handling MessageDelete'); }
+  });
+
+  client.on(Events.MessageBulkDelete, async (messages) => {
+    for (const message of messages.values()) {
+      try { await handleMessageDelete(message); } catch (err) { log.error({ err, messageId: message?.id }, 'Failed handling bulk delete'); }
+    }
+  });
+
   client.on(Events.ClientReady, async (readyClient) => {
     log.info({ user: readyClient.user.tag, guilds: readyClient.guilds.cache.size }, 'Discord client ready');
     await auditConfiguredChannels(readyClient);
+    if (config.linear.pollCommentsSeconds > 0) {
+      const ms = config.linear.pollCommentsSeconds * 1000;
+      log.info({ seconds: config.linear.pollCommentsSeconds }, 'Polling Linear for new comments');
+      pollTimer = setInterval(() => { pollLinearComments(); }, ms);
+      if (pollTimer.unref) pollTimer.unref();
+    }
   });
 
   client.on(Events.Error, (err) => log.error({ err }, 'Discord client error'));
@@ -301,6 +474,7 @@ export function createBot({ config, store, linear }) {
       await client.login(config.discord.token);
     },
     async stop() {
+      if (pollTimer) clearInterval(pollTimer);
       await client.destroy();
     },
   };

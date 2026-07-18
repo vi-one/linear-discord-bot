@@ -59,6 +59,26 @@ function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+/** Normalize an optional boolean field; anything non-boolean is a problem. */
+function normalizeBoolean(raw, where, problems, fallback) {
+  if (raw === undefined) return fallback;
+  if (typeof raw !== 'boolean') {
+    problems.push(`${where} must be true or false`);
+    return fallback;
+  }
+  return raw;
+}
+
+/** Normalize an optional seconds field; must be a non-negative integer (0 disables). */
+function normalizeSeconds(raw, where, problems, fallback) {
+  if (raw === undefined) return fallback;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || !Number.isInteger(raw)) {
+    problems.push(`${where} must be a non-negative integer number of seconds (0 disables)`);
+    return fallback;
+  }
+  return raw;
+}
+
 /**
  * Validate the raw parsed config and normalize it into the shape the rest of
  * the app consumes. Returns the normalized config or throws ConfigError.
@@ -77,6 +97,8 @@ function validateAndNormalize(raw, configPath) {
     problems.push('discord.token is required (set DISCORD_TOKEN and reference it as ${DISCORD_TOKEN})');
   }
 
+  const pollCommentsSeconds = normalizeSeconds(raw.linear?.pollCommentsSeconds, 'linear.pollCommentsSeconds', problems, 60);
+
   const defaultTriggerTag = raw.defaults?.triggerTag ?? DEFAULT_TRIGGER_TAG;
   if (!isNonEmptyString(defaultTriggerTag)) {
     problems.push('defaults.triggerTag must be a non-empty string when set');
@@ -84,6 +106,8 @@ function validateAndNormalize(raw, configPath) {
   // A guaranteed-safe string for normalization below, even when the default is
   // invalid (the problem above still makes us throw before returning).
   const safeDefaultTag = isNonEmptyString(defaultTriggerTag) ? defaultTriggerTag.trim() : DEFAULT_TRIGGER_TAG;
+
+  const defaultSyncMessages = normalizeBoolean(raw.defaults?.syncMessages, 'defaults.syncMessages', problems, true);
 
   const storePath = raw.store?.path ?? DEFAULT_STORE_PATH;
   if (!isNonEmptyString(storePath)) {
@@ -122,6 +146,8 @@ function validateAndNormalize(raw, configPath) {
           if (forum?.triggerTag !== undefined && !isNonEmptyString(forum.triggerTag)) {
             problems.push(`${fwhere}.triggerTag must be a non-empty string when set`);
           }
+
+          const syncMessages = normalizeBoolean(forum?.syncMessages, `${fwhere}.syncMessages`, problems, defaultSyncMessages);
 
           const labelMap = {};
           if (forum?.labelMap !== undefined) {
@@ -171,6 +197,7 @@ function validateAndNormalize(raw, configPath) {
             channelId,
             team: typeof forum?.team === 'string' ? forum.team.trim() : forum?.team,
             triggerTag: isNonEmptyString(forum?.triggerTag) ? forum.triggerTag.trim() : safeDefaultTag,
+            syncMessages,
             labelMap,
             defaultLabels,
           });
@@ -209,10 +236,10 @@ function validateAndNormalize(raw, configPath) {
   }
 
   return {
-    linear: { apiKey: raw.linear.apiKey.trim() },
+    linear: { apiKey: raw.linear.apiKey.trim(), pollCommentsSeconds },
     discord: { token: raw.discord.token.trim() },
     store: { path: storePath },
-    defaults: { triggerTag: safeDefaultTag },
+    defaults: { triggerTag: safeDefaultTag, syncMessages: defaultSyncMessages },
     guilds,
   };
 }

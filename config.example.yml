@@ -9,6 +9,9 @@
 linear:
   # Linear personal API key (https://linear.app/settings/api).
   apiKey: ${LINEAR_API_KEY}
+  # Poll Linear this often (seconds) for new/edited comments and mirror them
+  # into the matching Discord thread. 0 disables. No public endpoint needed.
+  pollCommentsSeconds: 60
 
 discord:
   # Discord bot token from the Developer Portal (Bot -> Token).
@@ -25,6 +28,9 @@ defaults:
   # Forum tag name that triggers issue creation. Matched case-insensitively
   # against the forum's tags. Can be overridden per forum below.
   triggerTag: TODO
+  # Mirror messages posted in a thread (that has an issue) as Linear comments.
+  # Edits update the comment, deletions remove it. Overridable per forum.
+  syncMessages: true
 
 # One entry per Discord server the bot should operate in. The bot must be
 # invited to each server. IDs are strings; keep them quoted so YAML does
@@ -59,3 +65,4 @@ guilds:
       - channelId: "555555555555555555"
         team: OPS
         triggerTag: Escalate
+        syncMessages: false             # Per-forum override of defaults.syncMessages

@@ -9,6 +9,8 @@ process.env.LOG_PRETTY = 'false';
 const {
   MAX_TITLE_LENGTH,
   MAX_DESCRIPTION_LENGTH,
+  MAX_COMMENT_LENGTH,
+  MAX_DISCORD_MESSAGE,
   truncate,
   escapeMarkdown,
   isDiscordCdnUrl,
@@ -16,7 +18,9 @@ const {
   tagNamesFromIds,
   shouldTrigger,
   labelNamesFor,
+  formatComment,
   formatIssueDescription,
+  formatLinearComment,
 } = await import('../src/pipeline.js');
 
 describe('shouldTrigger: the core "issue only on tag appearing" rule', () => {
@@ -220,6 +224,111 @@ describe('formatIssueDescription', () => {
       attachments: [{ name: 'a](x).png', url: 'https://cdn.discordapp.com/attachments/1/2/a.png' }],
     });
     assert.ok(out.includes('- [a\\]\\(x\\)\\.png](https://cdn.discordapp.com/attachments/1/2/a.png)'));
+  });
+});
+
+describe('formatComment', () => {
+  const base = {
+    authorTag: 'user#1234',
+    content: 'hello there',
+    attachments: [],
+  };
+
+  test('author header is present and escaped', () => {
+    const out = formatComment(base);
+    assert.ok(out.startsWith('**user\\#1234** on Discord:'));
+    assert.ok(out.includes('hello there'));
+  });
+
+  test('a malicious author name is markdown-escaped in the header', () => {
+    const out = formatComment({ ...base, authorTag: 'x](http://evil) *y*' });
+    assert.ok(!out.includes('](http://evil)'));
+    assert.ok(out.includes('**x\\]\\(http://evil\\) \\*y\\*** on Discord:'));
+  });
+
+  test('null authorTag falls back to "unknown"', () => {
+    const out = formatComment({ ...base, authorTag: null });
+    assert.ok(out.startsWith('**unknown** on Discord:'));
+  });
+
+  test('empty/null content produces the no-text placeholder', () => {
+    for (const content of [null, '', '   \n  ']) {
+      const out = formatComment({ ...base, content });
+      assert.ok(out.includes('*(no text content)*'));
+    }
+  });
+
+  test('non-CDN attachments are filtered out; CDN ones kept with escaped names', () => {
+    const out = formatComment({
+      ...base,
+      attachments: [
+        { name: 'a](x).png', url: 'https://cdn.discordapp.com/attachments/1/2/a.png' },
+        { name: 'evil.png', url: 'https://evil.example.com/evil.png' },
+      ],
+    });
+    assert.ok(out.includes('**Attachments**'));
+    assert.ok(out.includes('- [a\\]\\(x\\)\\.png](https://cdn.discordapp.com/attachments/1/2/a.png)'));
+    assert.ok(!out.includes('evil.example.com'));
+  });
+
+  test('no Attachments block when every attachment is filtered or the list is empty/null', () => {
+    const filtered = formatComment({
+      ...base,
+      attachments: [{ name: 'x', url: 'https://evil.example.com/x' }],
+    });
+    assert.ok(!filtered.includes('**Attachments**'));
+    const nullish = formatComment({ ...base, attachments: null });
+    assert.ok(!nullish.includes('**Attachments**'));
+  });
+
+  test('long content is truncated to MAX_COMMENT_LENGTH', () => {
+    const out = formatComment({ ...base, content: 'z'.repeat(MAX_COMMENT_LENGTH + 100) });
+    const body = out.split('\n\n')[1];
+    assert.equal(body.length, MAX_COMMENT_LENGTH);
+    assert.ok(body.endsWith('...'));
+  });
+});
+
+describe('formatLinearComment', () => {
+  const base = {
+    authorName: 'Alice',
+    body: 'hi from linear',
+    url: 'https://linear.app/company/issue/ENG-1#comment-abc',
+  };
+
+  test('header contains the author and "commented on Linear"', () => {
+    const out = formatLinearComment(base);
+    assert.ok(out.startsWith('**Alice** commented on Linear:'));
+    assert.ok(out.includes('hi from linear'));
+  });
+
+  test('the url is appended in angle brackets when present', () => {
+    const out = formatLinearComment(base);
+    assert.ok(out.endsWith(`<${base.url}>`));
+  });
+
+  test('the url is omitted when null', () => {
+    const out = formatLinearComment({ ...base, url: null });
+    assert.ok(!out.includes('<'));
+    assert.ok(out.endsWith('hi from linear'));
+  });
+
+  test('a very long body is truncated so the whole message fits in a Discord message', () => {
+    const out = formatLinearComment({ ...base, body: 'z'.repeat(MAX_DISCORD_MESSAGE + 500) });
+    assert.ok(out.length <= MAX_DISCORD_MESSAGE);
+    assert.ok(out.includes('...'));
+    assert.ok(out.endsWith(`<${base.url}>`), 'link survives truncation');
+  });
+
+  test('empty body becomes "(no text)"', () => {
+    for (const body of [null, '', '   \n  ']) {
+      assert.ok(formatLinearComment({ ...base, body }).includes('(no text)'));
+    }
+  });
+
+  test('null authorName falls back to "Linear" and asterisks are stripped', () => {
+    assert.ok(formatLinearComment({ ...base, authorName: null }).startsWith('**Linear** commented on Linear:'));
+    assert.ok(formatLinearComment({ ...base, authorName: '**bold**' }).startsWith('**bold** commented on Linear:'));
   });
 });
 

@@ -11,9 +11,8 @@ that forum:
   link back to the Discord thread and any attachments),
 - the thread's **forum tags** are mapped to **Linear labels** via config
   (plus optional always-applied default labels),
-- the bot then **DMs only that forum's moderators** (the members who hold the
-  configured moderator permission on the forum channel) a link to the created
-  issue; **nothing is posted in the public forum thread**.
+- the bot posts **nothing to Discord**; the issue lives in Linear, and creation
+  is logged but no message or DM is sent.
 
 It supports **multiple Discord servers**, **any number of forum channels per
 server**, and a **different Linear team per forum** (`forums[].team`).
@@ -45,11 +44,9 @@ second issue.
    and **New Application**.
 2. Under **Bot**:
    - **Reset Token** and save it; this is your `DISCORD_TOKEN`.
-   - Under **Privileged Gateway Intents**, enable **both**:
-     - **Message Content Intent**: required to read the thread starter message
-       for the issue description (without it Discord hands the bot empty content).
-     - **Server Members Intent**: required to resolve who a forum's moderators
-       are, so the bot can DM the issue announcement to only them.
+   - Under **Privileged Gateway Intents**, enable **Message Content Intent**:
+     required to read the thread starter message for the issue description
+     (without it Discord hands the bot empty content).
 3. Under **OAuth2 > URL Generator**:
    - Scopes: `bot`
    - Bot permissions: **View Channels**, **Send Messages**,
@@ -106,7 +103,6 @@ missing variable or invalid field.
 | `discord.token` | yes | Discord bot token. Use `${DISCORD_TOKEN}`. |
 | `store.path` | no | Path of the JSON dedupe store. Default `./data/processed.json`. Directory is auto-created. |
 | `defaults.triggerTag` | no | Global trigger tag name. Default `TODO`. |
-| `defaults.moderatorPermission` | no | Which permission marks a member as a forum moderator (the DM recipients). Default `ManageThreads`. One of `ManageThreads`, `ManageChannels`, `ManageMessages`, `ManageGuild`, `Administrator`. Per-forum overridable. |
 | `guilds[]` | yes | One entry per Discord server. |
 | `guilds[].id` | yes | Guild ID (quote it; it's a string). |
 | `guilds[].name` | no | Friendly name, used only in logs. |
@@ -116,16 +112,9 @@ missing variable or invalid field.
 | `forums[].triggerTag` | no | Per-forum override of `defaults.triggerTag`. |
 | `forums[].labelMap` | no | Mapping of Discord forum **tag name** -> Linear **label name**. Tags on the thread that appear here become labels on the issue. Matching is case-insensitive on both sides. |
 | `forums[].defaultLabels` | no | Linear label names applied to **every** issue created from this forum. |
-| `forums[].moderatorPermission` | no | Per-forum override of `defaults.moderatorPermission`. |
-
-**Notifications are private:** the bot never posts in the public forum
-thread. When an issue is created it **DMs only that forum's moderators**, the
-members who hold `moderatorPermission` on the forum channel (computed from role
-permissions + channel overwrites; server admins/owner are included). This
-requires the **Server Members Intent** so the bot can resolve those moderators,
-and each moderator must allow DMs from server members to receive the message. If
-a forum has no moderators (or all have DMs closed), the issue is still created
-and the situation is logged.
+**The bot posts nothing to Discord.** A created issue is only recorded in
+Linear; the bot does not reply in the forum thread, post to any channel, or send
+DMs. Issue creation is logged at info level.
 
 Environment variables (see `.env.example`): `DISCORD_TOKEN`, `LINEAR_API_KEY`,
 and optionally `CONFIG_PATH` (config file location, default `./config.yml`),
@@ -179,9 +168,8 @@ Notes:
 
 - One failing thread never takes the bot down: every event handler is wrapped,
   errors are logged with thread/issue context, and processing continues.
-- If issue creation succeeds but DMing a forum moderator fails (e.g. the
-  moderator's DMs are closed), the issue is still recorded and the failure is
-  logged; no duplicate on retry, and nothing leaks to the public thread.
+- The bot never writes to Discord: a created issue lives only in Linear, so
+  nothing can leak to the public thread and there is no notification to fail.
 - `SIGINT`/`SIGTERM` trigger a graceful shutdown: the Discord client
   disconnects and pending store writes are flushed.
 - The bot caches Linear team and label lookups in memory. If you add new

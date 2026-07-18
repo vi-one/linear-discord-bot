@@ -26,13 +26,6 @@ defaults:
   # against the forum's tags. Can be overridden per forum below.
   triggerTag: TODO
 
-  # When an issue is created the bot DMs the announcement ONLY to that forum's
-  # moderators: the members who hold this permission ON the forum channel.
-  # Nothing is posted in the public thread. Overridable per forum.
-  # One of: ManageThreads (default), ManageChannels, ManageMessages,
-  # ManageGuild, Administrator. Requires the Server Members Intent (see README).
-  moderatorPermission: ManageThreads
-
 # One entry per Discord server the bot should operate in. The bot must be
 # invited to each server. IDs are strings; keep them quoted so YAML does
 # not mangle them as numbers.
@@ -66,4 +59,3 @@ guilds:
       - channelId: "555555555555555555"
         team: OPS
         triggerTag: Escalate
-        moderatorPermission: ManageChannels   # overrides defaults.moderatorPermission for this forum

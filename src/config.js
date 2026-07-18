@@ -60,30 +60,6 @@ function isNonEmptyString(value) {
 }
 
 /**
- * The Discord permission that marks a member as a "moderator" of a forum. When
- * an issue is created the bot DMs exactly the members who hold this permission
- * on the forum channel, so the announcement is visible only to that forum's
- * moderators. Overridable per forum.
- */
-export const DEFAULT_MODERATOR_PERMISSION = 'ManageThreads';
-const MODERATOR_PERMISSIONS = new Set([
-  'ManageThreads',
-  'ManageChannels',
-  'ManageMessages',
-  'ManageGuild',
-  'Administrator',
-]);
-
-function normalizeModeratorPermission(raw, where, problems, fallback) {
-  if (raw === undefined) return fallback;
-  if (typeof raw !== 'string' || !MODERATOR_PERMISSIONS.has(raw)) {
-    problems.push(`${where} must be one of: ${[...MODERATOR_PERMISSIONS].join(', ')}`);
-    return fallback;
-  }
-  return raw;
-}
-
-/**
  * Validate the raw parsed config and normalize it into the shape the rest of
  * the app consumes. Returns the normalized config or throws ConfigError.
  */
@@ -108,15 +84,6 @@ function validateAndNormalize(raw, configPath) {
   // A guaranteed-safe string for normalization below, even when the default is
   // invalid (the problem above still makes us throw before returning).
   const safeDefaultTag = isNonEmptyString(defaultTriggerTag) ? defaultTriggerTag.trim() : DEFAULT_TRIGGER_TAG;
-
-  // Which permission defines a "moderator" for notifications (global default,
-  // overridable per forum). The bot DMs exactly the forum's moderators.
-  const defaultModeratorPermission = normalizeModeratorPermission(
-    raw.defaults?.moderatorPermission,
-    'defaults.moderatorPermission',
-    problems,
-    DEFAULT_MODERATOR_PERMISSION,
-  );
 
   const storePath = raw.store?.path ?? DEFAULT_STORE_PATH;
   if (!isNonEmptyString(storePath)) {
@@ -200,21 +167,12 @@ function validateAndNormalize(raw, configPath) {
             }
           }
 
-          // Per-forum moderator permission overrides the global default.
-          const moderatorPermission = normalizeModeratorPermission(
-            forum?.moderatorPermission,
-            `${fwhere}.moderatorPermission`,
-            problems,
-            defaultModeratorPermission,
-          );
-
           forums.push({
             channelId,
             team: typeof forum?.team === 'string' ? forum.team.trim() : forum?.team,
             triggerTag: isNonEmptyString(forum?.triggerTag) ? forum.triggerTag.trim() : safeDefaultTag,
             labelMap,
             defaultLabels,
-            moderatorPermission,
           });
         });
       }
@@ -254,7 +212,7 @@ function validateAndNormalize(raw, configPath) {
     linear: { apiKey: raw.linear.apiKey.trim() },
     discord: { token: raw.discord.token.trim() },
     store: { path: storePath },
-    defaults: { triggerTag: safeDefaultTag, moderatorPermission: defaultModeratorPermission },
+    defaults: { triggerTag: safeDefaultTag },
     guilds,
   };
 }

@@ -21,13 +21,11 @@ import {
   Client,
   Events,
   GatewayIntentBits,
-  PermissionFlagsBits,
   Partials,
 } from 'discord.js';
 import { childLogger } from './logger.js';
 import {
   MAX_TITLE_LENGTH,
-  escapeMarkdown,
   findTagId,
   formatIssueDescription,
   labelNamesFor,
@@ -60,7 +58,6 @@ export function createBot({ config, store, linear }) {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds, // guild + thread lifecycle events
-      GatewayIntentBits.GuildMembers, // privileged: enumerate members to resolve a forum's moderators
       GatewayIntentBits.MessageContent, // privileged: read the starter message body for issue descriptions
     ],
     // Threads/messages may arrive uncached; partials keep events flowing.
@@ -155,60 +152,6 @@ export function createBot({ config, store, linear }) {
     });
   }
 
-  /** Guilds whose full member list we've fetched (kept fresh by gateway member events). */
-  const membersFetched = new Set();
-
-  /**
-   * Notify ONLY this forum's moderators: the members who hold the configured
-   * moderator permission ON the forum channel (so the announcement is visible
-   * to nobody else). Sent as DMs; nothing is posted in the public thread.
-   * Failures (DMs closed, missing intent, etc.) are logged, never thrown; the
-   * Linear issue already exists.
-   */
-  async function notifyForumModerators(forumChannel, forumCfg, message) {
-    const permission = PermissionFlagsBits[forumCfg.moderatorPermission];
-    const guild = forumChannel.guild;
-
-    // Fetch the member list once per guild; gateway member events keep it fresh.
-    try {
-      if (!membersFetched.has(guild.id)) {
-        await guild.members.fetch();
-        membersFetched.add(guild.id);
-      }
-    } catch (err) {
-      warnOnce(`members:${guild.id}`, { guildId: guild.id, err: err.message },
-        'Could not fetch guild members to resolve forum moderators; enable the Server Members Intent in the Developer Portal');
-      return;
-    }
-
-    // A member is a moderator of THIS forum if they hold the permission on the
-    // forum channel itself (role perms + channel overwrites; admins/owner too).
-    const moderators = guild.members.cache.filter(
-      (m) => !m.user.bot && forumChannel.permissionsFor(m)?.has(permission),
-    );
-
-    if (moderators.size === 0) {
-      log.warn({ channelId: forumChannel.id, permission: forumCfg.moderatorPermission },
-        'No moderators found for this forum; issue announcement not delivered to anyone');
-      return;
-    }
-
-    let delivered = 0;
-    for (const moderator of moderators.values()) {
-      try {
-        await moderator.send(message);
-        delivered += 1;
-      } catch (err) {
-        log.warn({ userId: moderator.id, err: err.message },
-          'Could not DM a forum moderator (DMs closed / not reachable?)');
-      }
-    }
-    log.debug(
-      { channelId: forumChannel.id, moderators: moderators.size, delivered },
-      'Notified forum moderators of created issue',
-    );
-  }
-
   /**
    * Core pipeline: turn a triggered thread into a Linear issue exactly once.
    */
@@ -237,10 +180,9 @@ export function createBot({ config, store, linear }) {
         labelNames: labelNamesFor(forumCfg, tagNames),
       });
 
-      // Persist BEFORE announcing: if the reply fails we still never duplicate.
-      // A failed persist keeps the entry in memory (dedupe holds until restart)
-      // but is logged as an error so an operator can reconcile; a restart could
-      // otherwise re-create this issue.
+      // Persist the dedupe record. If it fails, the entry stays in memory
+      // (dedupe holds until restart) but we log an error so an operator can
+      // reconcile; a restart could otherwise re-create this issue.
       try {
         await store.set(thread.id, {
           issueId: issue.id,
@@ -257,17 +199,12 @@ export function createBot({ config, store, linear }) {
         );
       }
 
+      // Nothing is posted to Discord: the issue lives in Linear. This log line
+      // is the record that it was created.
       log.info(
         { threadId: thread.id, thread: thread.name, issue: issue.identifier, team: issue.teamKey, trigger },
         'Created Linear issue from forum thread',
       );
-
-      // Notify ONLY this forum's moderators (via DM); nothing is posted in the
-      // public thread. The message links back to the thread as the source.
-      const message =
-        `Linear issue **${issue.identifier}** created from forum thread ` +
-        `**${escapeMarkdown(thread.name)}** - <${thread.url}>\n${issue.url}`;
-      await notifyForumModerators(forumChannel, forumCfg, message);
     } finally {
       inFlight.delete(thread.id);
     }

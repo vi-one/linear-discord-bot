@@ -12,8 +12,7 @@ process.env.LOG_PRETTY = 'false';
 process.env.LINEAR_API_KEY = 'lin_test_key_value';
 process.env.DISCORD_TOKEN = 'discord_test_token_value';
 
-const { loadConfig, ConfigError, DEFAULT_TRIGGER_TAG, DEFAULT_STORE_PATH, DEFAULT_MODERATOR_PERMISSION } =
-  await import('../src/config.js');
+const { loadConfig, ConfigError, DEFAULT_TRIGGER_TAG, DEFAULT_STORE_PATH } = await import('../src/config.js');
 
 const EXAMPLE_CONFIG = fileURLToPath(new URL('../config.example.yml', import.meta.url));
 
@@ -85,12 +84,6 @@ describe('loadConfig', () => {
     assert.deepEqual(config.guilds[0].forums[1].labelMap, {});
     assert.deepEqual(config.guilds[0].forums[1].defaultLabels, ['community']);
     assert.equal(config.store.path, './data/processed.json');
-
-    // moderatorPermission: global default inherited where not overridden; per-forum overrides.
-    assert.equal(config.defaults.moderatorPermission, 'ManageThreads');
-    assert.equal(config.guilds[0].forums[0].moderatorPermission, 'ManageThreads'); // inherited
-    assert.equal(config.guilds[0].forums[1].moderatorPermission, 'ManageThreads'); // inherited
-    assert.equal(config.guilds[1].forums[0].moderatorPermission, 'ManageChannels'); // per-forum override
   });
 
   test('unquoted numeric guild id is rejected with a "quoted" hint', () => {
@@ -186,7 +179,6 @@ guilds:
     assert.equal(forum.triggerTag, DEFAULT_TRIGGER_TAG); // inherited default
     assert.deepEqual(forum.labelMap, { Bug: 'Linear Bug' }); // keys and values trimmed
     assert.deepEqual(forum.defaultLabels, ['discord']); // trimmed
-    assert.equal(forum.moderatorPermission, DEFAULT_MODERATOR_PERMISSION); // inherited default
   });
 
   test('a forum without labelMap/defaultLabels normalizes to empty containers', () => {
@@ -200,57 +192,5 @@ guilds:
     const forum = config.guilds[0].forums[0];
     assert.deepEqual(forum.labelMap, {});
     assert.deepEqual(forum.defaultLabels, []);
-    assert.equal(forum.moderatorPermission, DEFAULT_MODERATOR_PERMISSION);
-  });
-
-  test('moderatorPermission: per-forum overrides the inherited global default', () => {
-    const p = writeYaml(`
-linear:
-  apiKey: \${LINEAR_API_KEY}
-discord:
-  token: \${DISCORD_TOKEN}
-defaults:
-  moderatorPermission: ManageGuild
-guilds:
-  - id: "12345678901234567"
-    forums:
-      - channelId: "76543210987654321"
-        team: ENG
-      - channelId: "76543210987654322"
-        team: OPS
-        moderatorPermission: ManageChannels
-`);
-    const config = loadConfig(p);
-    assert.equal(config.defaults.moderatorPermission, 'ManageGuild');
-    assert.equal(config.guilds[0].forums[0].moderatorPermission, 'ManageGuild'); // inherited default
-    assert.equal(config.guilds[0].forums[1].moderatorPermission, 'ManageChannels'); // per-forum override
-  });
-
-  test('an unknown per-forum moderatorPermission is rejected with the allowed list', () => {
-    const p = writeYaml(validYaml(`
-  - id: "12345678901234567"
-    forums:
-      - channelId: "76543210987654321"
-        team: ENG
-        moderatorPermission: BanHammer
-`));
-    assertConfigError(p, /moderatorPermission must be one of: .*ManageThreads/);
-  });
-
-  test('an unknown defaults.moderatorPermission is rejected', () => {
-    const p = writeYaml(`
-linear:
-  apiKey: \${LINEAR_API_KEY}
-discord:
-  token: \${DISCORD_TOKEN}
-defaults:
-  moderatorPermission: Nope
-guilds:
-  - id: "12345678901234567"
-    forums:
-      - channelId: "76543210987654321"
-        team: ENG
-`);
-    assertConfigError(p, /defaults\.moderatorPermission must be one of/);
   });
 });

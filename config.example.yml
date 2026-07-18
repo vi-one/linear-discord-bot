@@ -9,9 +9,6 @@
 linear:
   # Linear personal API key (https://linear.app/settings/api).
   apiKey: ${LINEAR_API_KEY}
-  # Poll Linear this often (seconds) for new/edited comments and mirror them
-  # into the matching Discord thread. 0 disables. No public endpoint needed.
-  pollCommentsSeconds: 60
 
 discord:
   # Discord bot token from the Developer Portal (Bot -> Token).

@@ -11,13 +11,9 @@ that forum:
   link back to the Discord thread and any attachments),
 - the thread's **forum tags** are mapped to **Linear labels** via config
   (plus optional always-applied default labels),
-- after creation, **new messages in the thread are mirrored as Linear
+- and after creation, **new messages in the thread are mirrored as Linear
   comments** (edits update the comment, deletes remove it) when
-  `syncMessages` is on (the default),
-- and comment sync works **both ways**: the bot polls Linear (every
-  `linear.pollCommentsSeconds`, default 60s) and mirrors new/edited Linear
-  comments into the matching Discord thread. It never posts issue-creation
-  confirmations or DMs; issue creation itself is only logged.
+  `syncMessages` is on (the default).
 
 It supports **multiple Discord servers**, **any number of forum channels per
 server**, and a **different Linear team per forum** (`forums[].team`).
@@ -43,33 +39,15 @@ second issue.
 
 ## Message sync
 
-Comment sync is two-way, gated by `syncMessages` (on by default, can be turned
-off globally with `defaults.syncMessages: false` or per forum with
-`forums[].syncMessages`).
+Message sync is one-directional (Discord -> Linear), gated by `syncMessages`
+(on by default, can be turned off globally with `defaults.syncMessages: false`
+or per forum with `forums[].syncMessages`).
 
-**Discord -> Linear (gateway events).** Once a thread has a Linear issue, the
-bot copies each new human message in the thread to the issue as a comment.
-Editing the Discord message updates the comment; deleting it removes the
-comment. The bot's starter message is not duplicated (it is already the issue
-description). Bot and system messages are ignored.
-
-**Linear -> Discord (polling).** The bot polls the Linear API every
-`linear.pollCommentsSeconds` seconds (default 60, `0` disables) for comments
-created or edited since the last cycle and posts them into the matching
-Discord thread; an edited Linear comment edits the mirrored Discord message.
-No inbound HTTP endpoint or webhook is needed. Limitations of polling, stated
-plainly: a comment can take up to one poll interval to appear in Discord, and
-comment **deletions** made in Linear are **not detected** (only create and
-edit are mirrored back).
-
-**Loop prevention.** Comments authored by the bot's own Linear user (the API
-key user) are skipped by the poller, so comments that originated in Discord
-are not mirrored back. Mirrored Linear comments posted in Discord are
-bot-authored, so the Discord -> Linear path ignores them.
-
-No new intents or scopes are needed for the reverse sync: the personal API key
-can read comments, and posting in threads uses the existing Send Messages
-permission.
+Once a thread has a Linear issue, the bot copies each new human message in the
+thread to the issue as a comment. Editing the Discord message updates the
+comment; deleting it removes the comment. The bot's starter message is not
+duplicated (it is already the issue description). Bot and system messages are
+ignored.
 
 ## Prerequisites
 
@@ -137,7 +115,6 @@ missing variable or invalid field.
 | Field | Required | Description |
 |---|---|---|
 | `linear.apiKey` | yes | Linear personal API key. Use `${LINEAR_API_KEY}`. |
-| `linear.pollCommentsSeconds` | no | How often (seconds) to poll Linear for new/edited comments to mirror into Discord. Default `60`. `0` disables. |
 | `discord.token` | yes | Discord bot token. Use `${DISCORD_TOKEN}`. |
 | `store.path` | no | Path of the JSON dedupe store. Default `./data/processed.json`. Directory is auto-created. |
 | `defaults.triggerTag` | no | Global trigger tag name. Default `TODO`. |
@@ -153,11 +130,10 @@ missing variable or invalid field.
 | `forums[].labelMap` | no | Mapping of Discord forum **tag name** -> Linear **label name**. Tags on the thread that appear here become labels on the issue. Matching is case-insensitive on both sides. |
 | `forums[].defaultLabels` | no | Linear label names applied to **every** issue created from this forum. |
 
-**What the bot posts to Discord.** The bot does not send an issue-creation
-confirmation, reply in the thread about the new issue, or send DMs; issue
-creation is logged at info level. It DOES post in threads when the reverse
-comment sync is on: new/edited Linear comments are mirrored into the matching
-thread when `linear.pollCommentsSeconds` is greater than 0.
+**What the bot posts to Discord.** Nothing. The bot does not post in the forum
+thread, send issue-creation confirmations, or send DMs; issue creation is
+logged at info level. Its only write path is Linear: thread messages become
+issue comments when `syncMessages` is on.
 
 Environment variables (see `.env.example`): `DISCORD_TOKEN`, `LINEAR_API_KEY`,
 and optionally `CONFIG_PATH` (config file location, default `./config.yml`),
@@ -211,8 +187,7 @@ Notes:
 
 - One failing thread never takes the bot down: every event handler is wrapped,
   errors are logged with thread/issue context, and processing continues.
-- The bot writes to Discord only to mirror Linear comments into the matching
-  thread (when polling is on); it never posts issue-creation notices, so a
+- The bot never writes to Discord; it never posts issue-creation notices, so a
   created issue itself leaks nothing to the public thread.
 - `SIGINT`/`SIGTERM` trigger a graceful shutdown: the Discord client
   disconnects and pending store writes are flushed.

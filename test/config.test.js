@@ -62,9 +62,6 @@ describe('loadConfig', () => {
     assert.equal(config.linear.apiKey, 'lin_test_key_value');
     assert.equal(config.discord.token, 'discord_test_token_value');
 
-    // The example sets the comment-poll interval explicitly.
-    assert.equal(config.linear.pollCommentsSeconds, 60);
-
     // Two guilds, with the expected forums.
     assert.equal(config.guilds.length, 2);
     assert.equal(config.guilds[0].id, '111111111111111111');
@@ -244,54 +241,5 @@ guilds:
     const config = loadConfig(p);
     assert.equal(config.defaults.syncMessages, true);
     assert.equal(config.guilds[0].forums[0].syncMessages, true);
-  });
-
-  /** A valid config body with a custom linear.pollCommentsSeconds line. */
-  function yamlWithPollSeconds(value) {
-    return `
-linear:
-  apiKey: \${LINEAR_API_KEY}
-  pollCommentsSeconds: ${value}
-discord:
-  token: \${DISCORD_TOKEN}
-guilds:
-  - id: "12345678901234567"
-    forums:
-      - channelId: "76543210987654321"
-        team: ENG
-`;
-  }
-
-  test('a custom linear.pollCommentsSeconds integer is kept', () => {
-    const config = loadConfig(writeYaml(yamlWithPollSeconds('300')));
-    assert.equal(config.linear.pollCommentsSeconds, 300);
-  });
-
-  test('linear.pollCommentsSeconds: 0 is accepted (polling disabled)', () => {
-    const config = loadConfig(writeYaml(yamlWithPollSeconds('0')));
-    assert.equal(config.linear.pollCommentsSeconds, 0);
-  });
-
-  test('a negative linear.pollCommentsSeconds is rejected', () => {
-    assertConfigError(writeYaml(yamlWithPollSeconds('-5')), /non-negative integer/);
-  });
-
-  test('a non-integer linear.pollCommentsSeconds is rejected', () => {
-    assertConfigError(writeYaml(yamlWithPollSeconds('1.5')), /non-negative integer/);
-  });
-
-  test('a non-numeric linear.pollCommentsSeconds is rejected', () => {
-    assertConfigError(writeYaml(yamlWithPollSeconds('"soon"')), /non-negative integer/);
-  });
-
-  test('omitting linear.pollCommentsSeconds defaults to 60', () => {
-    const p = writeYaml(validYaml(`
-  - id: "12345678901234567"
-    forums:
-      - channelId: "76543210987654321"
-        team: ENG
-`));
-    const config = loadConfig(p);
-    assert.equal(config.linear.pollCommentsSeconds, 60);
   });
 });

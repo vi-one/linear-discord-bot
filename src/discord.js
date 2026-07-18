@@ -29,7 +29,6 @@ import {
   findTagId,
   formatComment,
   formatIssueDescription,
-  formatLinearComment,
   labelNamesFor,
   shouldTrigger,
   tagNamesFromIds,
@@ -37,10 +36,6 @@ import {
 } from './pipeline.js';
 
 const log = childLogger('discord');
-
-// Reserved store key (not a snowflake) that persists the last poll time for
-// the Linear -> Discord comment sync inside the existing store.
-const POLL_STATE_KEY = '#linear-poll-state';
 
 /**
  * Build the routing table: guildId -> (channelId -> forum config).
@@ -58,6 +53,11 @@ function buildRoutes(config) {
     routes.set(guild.id, forums);
   }
   return routes;
+}
+
+/** Map a discord.js attachment collection to plain {name, url} objects. */
+function attachmentList(attachments) {
+  return [...(attachments?.values() ?? [])].map((a) => ({ name: a.name, url: a.url }));
 }
 
 export function createBot({ config, store, linear }) {
@@ -81,9 +81,6 @@ export function createBot({ config, store, linear }) {
   const commentInFlight = new Set();
   /** Keys we already warned about, to avoid log spam on every event. */
   const warned = new Set();
-  /** Timer + reentrancy guard for the Linear comment poller. */
-  let pollTimer = null;
-  let polling = false;
 
   /** Log a warning only once per key (shared by the event path and startup audit). */
   function warnOnce(key, fields, message) {
@@ -158,9 +155,7 @@ export function createBot({ config, store, linear }) {
       threadUrl: thread.url,
       authorTag: starter?.author?.tag ?? starter?.author?.username ?? null,
       content: starter?.content ?? null,
-      attachments: starter?.attachments
-        ? [...starter.attachments.values()].map((a) => ({ name: a.name, url: a.url }))
-        : [],
+      attachments: attachmentList(starter?.attachments),
     });
   }
 
@@ -257,13 +252,11 @@ export function createBot({ config, store, linear }) {
     return {
       authorTag: message.author?.tag ?? message.author?.username ?? null,
       content: message.content ?? null,
-      attachments: [...(message.attachments?.values() ?? [])].map((a) => ({ name: a.name, url: a.url })),
+      attachments: attachmentList(message.attachments),
     };
   }
 
   async function handleMessageCreate(message) {
-    // Mirrored Linear comments are bot-authored, so this guard also stops them
-    // from being synced back to Linear (no loop).
     if (message.author?.bot || message.system) return;
     if (message.id === message.channelId) return; // forum starter message is already the issue description
     const ctx = commentContextFor(message);
@@ -306,74 +299,6 @@ export function createBot({ config, store, linear }) {
     delete rec.comments[message.id];
     await store.set(message.channelId, rec);
     log.debug({ threadId: message.channelId, messageId: message.id, comment: commentId }, 'Deleted Linear comment for deleted message');
-  }
-
-  // --- Reverse sync: poll Linear comments into Discord threads -------------
-
-  // Reverse index: Linear issue id -> tracked thread. Skips the reserved
-  // poll-state record and any record without an issueId.
-  function issueThreadIndex() {
-    const idx = new Map();
-    for (const [threadId, rec] of store.entries) {
-      if (rec?.issueId) idx.set(rec.issueId, { threadId, rec });
-    }
-    return idx;
-  }
-
-  // Mirror one Linear comment into its Discord thread (create or edit).
-  // Persists the commentId -> discord messageId mapping in rec.linearComments.
-  async function mirrorLinearComment(threadId, rec, comment) {
-    const body = formatLinearComment({ authorName: comment.authorName, body: comment.body, url: comment.url });
-    let channel;
-    try {
-      channel = await client.channels.fetch(threadId);
-    } catch (err) {
-      log.warn({ threadId, commentId: comment.id, err: err.message }, 'Could not fetch thread to mirror Linear comment');
-      return;
-    }
-    if (!channel?.isTextBased?.()) return;
-    rec.linearComments ??= {};
-    const existingMsgId = rec.linearComments[comment.id];
-    try {
-      if (existingMsgId) {
-        const msg = await channel.messages.fetch(existingMsgId).catch(() => null);
-        if (msg) { await msg.edit(body); return; }
-      }
-      const sent = await channel.send(body);
-      rec.linearComments[comment.id] = sent.id;
-      await store.set(threadId, rec);
-    } catch (err) {
-      log.warn({ threadId, commentId: comment.id, err: err.message }, 'Could not post/edit Linear comment in thread');
-    }
-  }
-
-  // One poll cycle: fetch comments updated since the last cycle and mirror
-  // them. Non-overlapping (polling guard); skips the bot's own comments and
-  // untracked issues; only forums with syncMessages on.
-  async function pollLinearComments() {
-    if (polling) return;
-    polling = true;
-    try {
-      const stored = store.get(POLL_STATE_KEY);
-      const since = stored?.lastPollAt ?? new Date().toISOString();
-      const nextSince = new Date().toISOString();
-      const comments = await linear.pollComments(since);
-      const index = issueThreadIndex();
-      for (const comment of comments) {
-        if (!comment.issueId) continue;
-        if (comment.authorId && comment.authorId === linear.viewerId) continue; // our own comment (originated from Discord)
-        const target = index.get(comment.issueId);
-        if (!target) continue; // not a tracked issue
-        const forumCfg = routes.get(target.rec.guildId)?.get(target.rec.channelId);
-        if (!forumCfg || !forumCfg.syncMessages) continue;
-        await mirrorLinearComment(target.threadId, target.rec, comment);
-      }
-      await store.set(POLL_STATE_KEY, { lastPollAt: nextSince });
-    } catch (err) {
-      log.error({ err }, 'Linear comment poll cycle failed');
-    } finally {
-      polling = false;
-    }
   }
 
   client.on(Events.ThreadCreate, async (thread, newlyCreated) => {
@@ -419,12 +344,6 @@ export function createBot({ config, store, linear }) {
   client.on(Events.ClientReady, async (readyClient) => {
     log.info({ user: readyClient.user.tag, guilds: readyClient.guilds.cache.size }, 'Discord client ready');
     await auditConfiguredChannels(readyClient);
-    if (config.linear.pollCommentsSeconds > 0) {
-      const ms = config.linear.pollCommentsSeconds * 1000;
-      log.info({ seconds: config.linear.pollCommentsSeconds }, 'Polling Linear for new comments');
-      pollTimer = setInterval(() => { pollLinearComments(); }, ms);
-      if (pollTimer.unref) pollTimer.unref();
-    }
   });
 
   client.on(Events.Error, (err) => log.error({ err }, 'Discord client error'));
@@ -474,7 +393,6 @@ export function createBot({ config, store, linear }) {
       await client.login(config.discord.token);
     },
     async stop() {
-      if (pollTimer) clearInterval(pollTimer);
       await client.destroy();
     },
   };

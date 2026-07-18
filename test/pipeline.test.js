@@ -10,7 +10,6 @@ const {
   MAX_TITLE_LENGTH,
   MAX_DESCRIPTION_LENGTH,
   MAX_COMMENT_LENGTH,
-  MAX_DISCORD_MESSAGE,
   truncate,
   escapeMarkdown,
   isDiscordCdnUrl,
@@ -20,7 +19,6 @@ const {
   labelNamesFor,
   formatComment,
   formatIssueDescription,
-  formatLinearComment,
 } = await import('../src/pipeline.js');
 
 describe('shouldTrigger: the core "issue only on tag appearing" rule', () => {
@@ -286,49 +284,6 @@ describe('formatComment', () => {
     const body = out.split('\n\n')[1];
     assert.equal(body.length, MAX_COMMENT_LENGTH);
     assert.ok(body.endsWith('...'));
-  });
-});
-
-describe('formatLinearComment', () => {
-  const base = {
-    authorName: 'Alice',
-    body: 'hi from linear',
-    url: 'https://linear.app/company/issue/ENG-1#comment-abc',
-  };
-
-  test('header contains the author and "commented on Linear"', () => {
-    const out = formatLinearComment(base);
-    assert.ok(out.startsWith('**Alice** commented on Linear:'));
-    assert.ok(out.includes('hi from linear'));
-  });
-
-  test('the url is appended in angle brackets when present', () => {
-    const out = formatLinearComment(base);
-    assert.ok(out.endsWith(`<${base.url}>`));
-  });
-
-  test('the url is omitted when null', () => {
-    const out = formatLinearComment({ ...base, url: null });
-    assert.ok(!out.includes('<'));
-    assert.ok(out.endsWith('hi from linear'));
-  });
-
-  test('a very long body is truncated so the whole message fits in a Discord message', () => {
-    const out = formatLinearComment({ ...base, body: 'z'.repeat(MAX_DISCORD_MESSAGE + 500) });
-    assert.ok(out.length <= MAX_DISCORD_MESSAGE);
-    assert.ok(out.includes('...'));
-    assert.ok(out.endsWith(`<${base.url}>`), 'link survives truncation');
-  });
-
-  test('empty body becomes "(no text)"', () => {
-    for (const body of [null, '', '   \n  ']) {
-      assert.ok(formatLinearComment({ ...base, body }).includes('(no text)'));
-    }
-  });
-
-  test('null authorName falls back to "Linear" and asterisks are stripped', () => {
-    assert.ok(formatLinearComment({ ...base, authorName: null }).startsWith('**Linear** commented on Linear:'));
-    assert.ok(formatLinearComment({ ...base, authorName: '**bold**' }).startsWith('**bold** commented on Linear:'));
   });
 });
 

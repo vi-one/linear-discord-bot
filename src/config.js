@@ -69,16 +69,6 @@ function normalizeBoolean(raw, where, problems, fallback) {
   return raw;
 }
 
-/** Normalize an optional seconds field; must be a non-negative integer (0 disables). */
-function normalizeSeconds(raw, where, problems, fallback) {
-  if (raw === undefined) return fallback;
-  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || !Number.isInteger(raw)) {
-    problems.push(`${where} must be a non-negative integer number of seconds (0 disables)`);
-    return fallback;
-  }
-  return raw;
-}
-
 /**
  * Validate the raw parsed config and normalize it into the shape the rest of
  * the app consumes. Returns the normalized config or throws ConfigError.
@@ -96,8 +86,6 @@ function validateAndNormalize(raw, configPath) {
   if (!isNonEmptyString(raw.discord?.token)) {
     problems.push('discord.token is required (set DISCORD_TOKEN and reference it as ${DISCORD_TOKEN})');
   }
-
-  const pollCommentsSeconds = normalizeSeconds(raw.linear?.pollCommentsSeconds, 'linear.pollCommentsSeconds', problems, 60);
 
   const defaultTriggerTag = raw.defaults?.triggerTag ?? DEFAULT_TRIGGER_TAG;
   if (!isNonEmptyString(defaultTriggerTag)) {
@@ -236,7 +224,7 @@ function validateAndNormalize(raw, configPath) {
   }
 
   return {
-    linear: { apiKey: raw.linear.apiKey.trim(), pollCommentsSeconds },
+    linear: { apiKey: raw.linear.apiKey.trim() },
     discord: { token: raw.discord.token.trim() },
     store: { path: storePath },
     defaults: { triggerTag: safeDefaultTag, syncMessages: defaultSyncMessages },
